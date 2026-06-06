@@ -43,6 +43,8 @@
 build/
 Build/
 build-*/
+cmake-build-*/
+out/
 
 # CMake generated files
 CMakeFiles/
@@ -67,3 +69,13 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
