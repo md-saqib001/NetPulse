@@ -19,3 +19,11 @@ mkdir build
 cd build
 cmake ..
 make
+
+
+## Core Capabilities
+
+**1. PCAP Binary Parsing**
+* Reads raw `.pcap` files in strict binary mode.
+* Auto-detects and corrects cross-platform Endianness mismatches (Host vs Network byte order) using magic number validation (`0xa1b2c3d4` vs `0xd4c3b2a1`).
+* Extracts variable-length packet payloads accurately using the `incl_len` header field.

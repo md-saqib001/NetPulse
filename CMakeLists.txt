@@ -16,3 +16,7 @@ add_executable(netpulse
     src/sni_extractor.cpp
     src/classifier.cpp
 )
+
+if(WIN32)
+    target_link_libraries(netpulse ws2_32)
+endif()

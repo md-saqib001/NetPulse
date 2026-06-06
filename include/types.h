@@ -2,11 +2,30 @@
 
 #include <cstdint>
 #include <vector>
+#include <string>
 
 // Forward declarations for structures to be implemented later
-struct ParsedPacket;
 struct FiveTuple;
 struct Flow;
+
+struct ParsedPacket {
+    uint8_t src_mac[6] = {0};
+    uint8_t dst_mac[6] = {0};
+    uint16_t ether_type = 0;
+    uint32_t src_ip = 0;
+    uint32_t dst_ip = 0;
+    uint8_t protocol = 0;
+    uint8_t ip_header_len = 0;
+    uint16_t src_port = 0;
+    uint16_t dst_port = 0;
+    const uint8_t* payload = nullptr;
+    size_t payload_len = 0;
+    bool has_ip = false;
+    bool has_tcp = false;
+    bool has_udp = false;
+};
+
+std::string ipToString(uint32_t ip);
 
 inline uint32_t swap32(uint32_t val) {
     return ((val & 0x000000FFu) << 24) |
