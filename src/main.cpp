@@ -1,4 +1,6 @@
 #include <iostream>
+#include "pcap_reader.h"
+#include "types.h"
 
 int main(int argc, char* argv[]) {
     if (argc != 2) {
@@ -6,7 +8,25 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "NetPulse v1.0 — Deep Packet Inspection Engine\n";
-    std::cout << "File: " << argv[1] << "\n";
+    std::string filename = argv[1];
+    PcapReader reader;
+
+    if (!reader.open(filename)) {
+        std::cerr << "Error: Failed to open PCAP file " << filename << "\n";
+        return 1;
+    }
+
+    std::cout << "Reading: " << filename << "\n";
+
+    RawPacket packet;
+    while (reader.readNextPacket(packet)) {
+        // Read packet data in a loop
+    }
+
+    std::cout << "Total packets: " << reader.packetCount() << "\n";
+
+    reader.close();
+    std::cout << "File closed successfully.\n";
+
     return 0;
 }
