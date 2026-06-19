@@ -21,6 +21,14 @@ bool PacketParser::parse(const RawPacket& raw, ParsedPacket& out) {
     if (!parseIPv4(raw, out)) {
         return false;
     }
+
+    // Dispatch to transport-layer parser based on protocol
+    if (out.protocol == 6) {        // TCP
+        parseTCP(raw, out);
+    } else if (out.protocol == 17) { // UDP
+        parseUDP(raw, out);
+    }
+
     return true;
 }
 
@@ -67,8 +75,70 @@ bool PacketParser::parseIPv4(const RawPacket& raw, ParsedPacket& out) {
     out.dst_ip = ntohl(raw_dst_ip);
     out.has_ip = true;
 
+    // Default payload to right after IP header (overridden by TCP/UDP parsers)
     out.payload = ip_ptr + ip_header_len;
     out.payload_len = ip_available - ip_header_len;
+
+    return true;
+}
+
+bool PacketParser::parseTCP(const RawPacket& raw, ParsedPacket& out) {
+    // TCP header starts after Ethernet (14) + IP header
+    size_t tcp_offset = 14 + out.ip_header_len;
+
+    // Need at least 20 bytes for minimum TCP header
+    if (raw.data.size() < tcp_offset + 20) {
+        return false;
+    }
+
+    const uint8_t* tcp_ptr = raw.data.data() + tcp_offset;
+
+    // Read source and destination ports (bytes 0-1, 2-3)
+    uint16_t raw_src_port, raw_dst_port;
+    std::memcpy(&raw_src_port, tcp_ptr + 0, sizeof(uint16_t));
+    std::memcpy(&raw_dst_port, tcp_ptr + 2, sizeof(uint16_t));
+    out.src_port = ntohs(raw_src_port);
+    out.dst_port = ntohs(raw_dst_port);
+
+    // Data offset: top 4 bits of byte 12 → header length in 32-bit words
+    uint8_t data_offset = (tcp_ptr[12] >> 4) & 0x0F;
+    uint8_t tcp_header_len = data_offset * 4;
+
+    // Validate that we have enough data for the full TCP header
+    if (raw.data.size() < tcp_offset + tcp_header_len) {
+        return false;
+    }
+
+    // Payload starts after the TCP header
+    out.payload = tcp_ptr + tcp_header_len;
+    out.payload_len = raw.data.size() - tcp_offset - tcp_header_len;
+    out.has_tcp = true;
+
+    return true;
+}
+
+bool PacketParser::parseUDP(const RawPacket& raw, ParsedPacket& out) {
+    // UDP header starts after Ethernet (14) + IP header
+    size_t udp_offset = 14 + out.ip_header_len;
+
+    // UDP header is exactly 8 bytes
+    if (raw.data.size() < udp_offset + 8) {
+        return false;
+    }
+
+    const uint8_t* udp_ptr = raw.data.data() + udp_offset;
+
+    // Read source and destination ports (bytes 0-1, 2-3)
+    uint16_t raw_src_port, raw_dst_port;
+    std::memcpy(&raw_src_port, udp_ptr + 0, sizeof(uint16_t));
+    std::memcpy(&raw_dst_port, udp_ptr + 2, sizeof(uint16_t));
+    out.src_port = ntohs(raw_src_port);
+    out.dst_port = ntohs(raw_dst_port);
+
+    // Payload starts at byte 8 of UDP header
+    out.payload = udp_ptr + 8;
+    out.payload_len = raw.data.size() - udp_offset - 8;
+    out.has_udp = true;
 
     return true;
 }

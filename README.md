@@ -27,3 +27,10 @@ make
 * Reads raw `.pcap` files in strict binary mode.
 * Auto-detects and corrects cross-platform Endianness mismatches (Host vs Network byte order) using magic number validation (`0xa1b2c3d4` vs `0xd4c3b2a1`).
 * Extracts variable-length packet payloads accurately using the `incl_len` header field.
+
+
+**2. Network Layer Parsing (IPv4)**
+* Slices standard 14-byte Ethernet frames (IEEE 802.3).
+* Extracts and validates IPv4 headers, dynamically calculating the Internet Header Length (IHL) via bitwise masking.
+* Normalizes Big-Endian Network Byte Order for accurate IP address logging.
+* Performs zero-copy pointer arithmetic to locate inner protocol payloads.
