@@ -5,6 +5,8 @@
 #include <string>
 #include <functional>
 #include <unordered_map>
+#include "classifier.h"
+
 
 // ─── Parsed packet produced by PacketParser ─────────────────────────────
 
@@ -69,6 +71,7 @@ struct Flow {
     uint32_t    packet_count = 0;   // Incremented per packet
     uint64_t    byte_count   = 0;   // Accumulated payload bytes
     bool        classified   = false; // True once SNI is extracted
+    AppType     app_type     = AppType::UNKNOWN;
 };
 
 // ─── FlowTable: hash map from FiveTuple → Flow ─────────────────────────
