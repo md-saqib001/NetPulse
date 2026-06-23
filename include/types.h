@@ -25,6 +25,14 @@ struct ParsedPacket {
     bool has_ip = false;
     bool has_tcp = false;
     bool has_udp = false;
+    bool parse_error = false;
+    std::string error_reason = "";
+};
+
+struct ParseStats {
+    uint32_t non_ipv4_skipped = 0;
+    uint32_t parse_errors = 0;
+    uint32_t short_packets = 0;
 };
 
 // ─── Five-tuple: uniquely identifies a connection / flow ────────────────

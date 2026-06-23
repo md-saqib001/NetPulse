@@ -1,17 +1,18 @@
 #include "pcap_reader.h"
 #include <iostream>
+#include <cstdlib>
 
 bool PcapReader::open(const std::string& filename) {
     file_.open(filename, std::ios::binary);
     if (!file_.is_open()) {
-        std::cerr << "Error: Could not open file " << filename << "\n";
-        return false;
+        std::cerr << "Error: cannot open file: " << filename << "\n";
+        std::exit(1);
     }
 
     PcapGlobalHeader global_header;
     file_.read(reinterpret_cast<char*>(&global_header), sizeof(PcapGlobalHeader));
     if (file_.gcount() < static_cast<std::streamsize>(sizeof(PcapGlobalHeader))) {
-        std::cerr << "Error: Could not read PCAP global header from " << filename << "\n";
+        // Just empty / less than global header -> graceful exit or handle as empty
         file_.close();
         return false;
     }
@@ -21,9 +22,8 @@ bool PcapReader::open(const std::string& filename) {
     } else if (global_header.magic_number == 0xd4c3b2a1) {
         byte_swapped_ = true;
     } else {
-        std::cerr << "Error: Invalid PCAP magic number in " << filename << "\n";
-        file_.close();
-        return false;
+        std::cerr << "Error: not a valid PCAP file (bad magic)\n";
+        std::exit(1);
     }
 
     packet_count_ = 0;
@@ -38,7 +38,7 @@ bool PcapReader::readNextPacket(RawPacket& packet) {
     PcapPacketHeader header;
     file_.read(reinterpret_cast<char*>(&header), sizeof(PcapPacketHeader));
     if (file_.gcount() < static_cast<std::streamsize>(sizeof(PcapPacketHeader))) {
-        return false;
+        return false; // graceful end of file or truncated
     }
 
     if (byte_swapped_) {
@@ -54,7 +54,7 @@ bool PcapReader::readNextPacket(RawPacket& packet) {
     if (header.incl_len > 0) {
         file_.read(reinterpret_cast<char*>(packet.data.data()), header.incl_len);
         if (file_.gcount() < static_cast<std::streamsize>(header.incl_len)) {
-            return false;
+            return false; // truncated mid-packet
         }
     }
 

@@ -15,8 +15,15 @@ add_executable(netpulse
     src/packet_parser.cpp
     src/sni_extractor.cpp
     src/classifier.cpp
+    src/reporter.cpp
+    src/cli_parser.cpp
 )
 
 if(WIN32)
     target_link_libraries(netpulse ws2_32)
 endif()
+
+# Enable compiler warnings
+target_compile_options(netpulse PRIVATE -Wall -Wextra)
+
+# Note: Set CMAKE_BUILD_TYPE to Debug or Release when configuring the project

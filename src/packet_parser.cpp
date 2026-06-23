@@ -11,29 +11,33 @@
 #include <arpa/inet.h>
 #endif
 
-bool PacketParser::parse(const RawPacket& raw, ParsedPacket& out) {
-    if (!parseEthernet(raw, out)) {
+bool PacketParser::parse(const RawPacket& raw, ParsedPacket& out, ParseStats& stats) {
+    if (!parseEthernet(raw, out, stats)) {
         return false;
     }
     if (out.ether_type != 0x0800) {
+        stats.non_ipv4_skipped++;
         return false;
     }
-    if (!parseIPv4(raw, out)) {
+    if (!parseIPv4(raw, out, stats)) {
         return false;
     }
 
     // Dispatch to transport-layer parser based on protocol
     if (out.protocol == 6) {        // TCP
-        parseTCP(raw, out);
+        if (!parseTCP(raw, out, stats)) return false;
     } else if (out.protocol == 17) { // UDP
-        parseUDP(raw, out);
+        if (!parseUDP(raw, out, stats)) return false;
     }
 
     return true;
 }
 
-bool PacketParser::parseEthernet(const RawPacket& raw, ParsedPacket& out) {
+bool PacketParser::parseEthernet(const RawPacket& raw, ParsedPacket& out, ParseStats& stats) {
     if (raw.data.size() < 14) {
+        stats.short_packets++;
+        out.parse_error = true;
+        out.error_reason = "Packet shorter than Ethernet header";
         return false;
     }
     std::memcpy(out.dst_mac, raw.data.data(), 6);
@@ -46,8 +50,11 @@ bool PacketParser::parseEthernet(const RawPacket& raw, ParsedPacket& out) {
     return true;
 }
 
-bool PacketParser::parseIPv4(const RawPacket& raw, ParsedPacket& out) {
+bool PacketParser::parseIPv4(const RawPacket& raw, ParsedPacket& out, ParseStats& stats) {
     if (raw.data.size() < 34) { // 14 (Eth) + 20 (min IP header)
+        stats.short_packets++;
+        out.parse_error = true;
+        out.error_reason = "Packet shorter than IPv4 header";
         return false;
     }
     const uint8_t* ip_ptr = raw.data.data() + 14;
@@ -55,12 +62,34 @@ bool PacketParser::parseIPv4(const RawPacket& raw, ParsedPacket& out) {
 
     uint8_t version = (ip_ptr[0] >> 4) & 0x0F;
     if (version != 4) {
+        // We shouldn't get here because ether_type == 0x0800 ensures IPv4
         return false;
     }
 
     uint8_t ihl = ip_ptr[0] & 0x0F;
+    if (ihl < 5) {
+        stats.parse_errors++;
+        out.parse_error = true;
+        out.error_reason = "Invalid IPv4 IHL < 5";
+        return false;
+    }
+
     uint8_t ip_header_len = ihl * 4;
     if (ip_available < ip_header_len) {
+        stats.short_packets++;
+        out.parse_error = true;
+        out.error_reason = "Packet truncated inside IPv4 header";
+        return false;
+    }
+
+    uint16_t total_length;
+    std::memcpy(&total_length, ip_ptr + 2, sizeof(uint16_t));
+    total_length = ntohs(total_length);
+
+    if (total_length > ip_available) {
+        stats.short_packets++;
+        out.parse_error = true;
+        out.error_reason = "IPv4 header claims more bytes than packet has";
         return false;
     }
 
@@ -75,69 +104,83 @@ bool PacketParser::parseIPv4(const RawPacket& raw, ParsedPacket& out) {
     out.dst_ip = ntohl(raw_dst_ip);
     out.has_ip = true;
 
-    // Default payload to right after IP header (overridden by TCP/UDP parsers)
+    // Use total_length as payload bound rather than ip_available
+    size_t actual_ip_payload = total_length - ip_header_len;
     out.payload = ip_ptr + ip_header_len;
-    out.payload_len = ip_available - ip_header_len;
+    out.payload_len = actual_ip_payload;
 
     return true;
 }
 
-bool PacketParser::parseTCP(const RawPacket& raw, ParsedPacket& out) {
-    // TCP header starts after Ethernet (14) + IP header
+bool PacketParser::parseTCP(const RawPacket& raw, ParsedPacket& out, ParseStats& stats) {
     size_t tcp_offset = 14 + out.ip_header_len;
 
-    // Need at least 20 bytes for minimum TCP header
     if (raw.data.size() < tcp_offset + 20) {
+        stats.short_packets++;
+        out.parse_error = true;
+        out.error_reason = "Packet shorter than TCP header";
         return false;
     }
 
     const uint8_t* tcp_ptr = raw.data.data() + tcp_offset;
 
-    // Read source and destination ports (bytes 0-1, 2-3)
     uint16_t raw_src_port, raw_dst_port;
     std::memcpy(&raw_src_port, tcp_ptr + 0, sizeof(uint16_t));
     std::memcpy(&raw_dst_port, tcp_ptr + 2, sizeof(uint16_t));
     out.src_port = ntohs(raw_src_port);
     out.dst_port = ntohs(raw_dst_port);
 
-    // Data offset: top 4 bits of byte 12 → header length in 32-bit words
     uint8_t data_offset = (tcp_ptr[12] >> 4) & 0x0F;
-    uint8_t tcp_header_len = data_offset * 4;
-
-    // Validate that we have enough data for the full TCP header
-    if (raw.data.size() < tcp_offset + tcp_header_len) {
+    if (data_offset < 5) {
+        stats.parse_errors++;
+        out.parse_error = true;
+        out.error_reason = "TCP data offset < 5";
         return false;
     }
 
-    // Payload starts after the TCP header
+    uint8_t tcp_header_len = data_offset * 4;
+
+    if (raw.data.size() < tcp_offset + tcp_header_len || out.payload_len < tcp_header_len) {
+        stats.short_packets++;
+        out.parse_error = true;
+        out.error_reason = "Packet truncated inside TCP header";
+        return false;
+    }
+
     out.payload = tcp_ptr + tcp_header_len;
-    out.payload_len = raw.data.size() - tcp_offset - tcp_header_len;
+    out.payload_len -= tcp_header_len;
     out.has_tcp = true;
 
     return true;
 }
 
-bool PacketParser::parseUDP(const RawPacket& raw, ParsedPacket& out) {
-    // UDP header starts after Ethernet (14) + IP header
+bool PacketParser::parseUDP(const RawPacket& raw, ParsedPacket& out, ParseStats& stats) {
     size_t udp_offset = 14 + out.ip_header_len;
 
-    // UDP header is exactly 8 bytes
     if (raw.data.size() < udp_offset + 8) {
+        stats.short_packets++;
+        out.parse_error = true;
+        out.error_reason = "Packet shorter than UDP header";
         return false;
     }
 
     const uint8_t* udp_ptr = raw.data.data() + udp_offset;
 
-    // Read source and destination ports (bytes 0-1, 2-3)
     uint16_t raw_src_port, raw_dst_port;
     std::memcpy(&raw_src_port, udp_ptr + 0, sizeof(uint16_t));
     std::memcpy(&raw_dst_port, udp_ptr + 2, sizeof(uint16_t));
     out.src_port = ntohs(raw_src_port);
     out.dst_port = ntohs(raw_dst_port);
 
-    // Payload starts at byte 8 of UDP header
+    if (out.payload_len < 8) {
+        stats.short_packets++;
+        out.parse_error = true;
+        out.error_reason = "Packet truncated inside UDP header";
+        return false;
+    }
+
     out.payload = udp_ptr + 8;
-    out.payload_len = raw.data.size() - udp_offset - 8;
+    out.payload_len -= 8;
     out.has_udp = true;
 
     return true;
