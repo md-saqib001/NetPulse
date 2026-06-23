@@ -10,4 +10,5 @@ struct Config {
     std::string filter_app = "";
     bool help = false;
     bool no_color = false;
+    bool demo = false;
 };

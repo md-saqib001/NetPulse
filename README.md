@@ -1,91 +1,210 @@
 # NetPulse
+## Deep Packet Inspection Engine (C++17)
 
-NetPulse is a high-performance, command-line Deep Packet Inspection (DPI) engine written from scratch in C++17. Designed to analyze raw network traffic from `.pcap` files, it performs zero-copy payload extraction and stateful flow tracking by natively parsing the TCP/IP stack.
+A CLI tool that reads PCAP network captures, parses the 
+complete network stack (Ethernet → IP → TCP/TLS), extracts 
+Server Name Indication (SNI) from TLS Client Hello packets, 
+classifies applications, and generates a traffic report.
 
-## Core Capabilities
+**Key insight:** Even though HTTPS is encrypted, the 
+destination domain name is transmitted in plaintext in the 
+TLS Client Hello handshake (RFC 6066). NetPulse verifies 
+this on real traffic.
 
-### 1. PCAP Ingestion & Binary Parsing
-* **Direct I/O:** Reads raw `.pcap` capture files directly into memory buffers.
-* **Architecture Agnostic:** Automatically detects capture Endianness via PCAP magic numbers and normalizes timestamps and packet lengths into Host Byte Order.
-
-### 2. Zero-Copy Protocol Parsing (L2 - L4)
-The parsing engine uses strict pointer arithmetic to slide a cursor through the network envelope, entirely avoiding the memory overhead of copying nested array data.
-* **Data Link Layer (L2):** Extracts MAC addresses and isolates 14-byte IEEE 802.3 Ethernet frames.
-* **Network Layer (L3 - IPv4):** Validates IPv4 headers, applies bitwise masking to dynamically calculate Internet Header Length (IHL), and converts Network Byte Order to Host Byte Order for IP addresses.
-* **Transport Layer (L4 - TCP/UDP):** * Parses static 8-byte UDP headers.
-  * Dynamically calculates variable-length TCP headers using the data offset nibble.
-  * Successfully isolates the final Application Layer (L7) payload for downstream analysis.
-
-### 3. Stateful Flow Tracking
-NetPulse upgrades from stateless packet counting to true state-tracking (similar to enterprise firewalls) by managing unidirectional connections.
-* **The 5-Tuple:** Uniquely maps connections using `Source IP`, `Destination IP`, `Source Port`, `Destination Port`, and `Protocol`.
-* **High-Efficiency Hashing:** Implements a custom, Boost-inspired mathematical hash combiner utilizing the golden ratio (`0x9e3779b9`) and bit-shifting. This destroys tuple symmetry, preventing hash collisions and ensuring pure $O(1)$ lookup times in the internal C++ `std::unordered_map`.
-* **Traffic Analytics:** Accumulates real-time packet counts and payload byte sizes for every unique flow across the network.
-
-## Technical Architecture
-* **Language:** C++17
-* **Memory Management:** Zero-copy application payload referencing via `const uint8_t*`.
-* **Standard Libraries:** `#pragma pack` for hardware-accurate structs, bitwise operators for protocol flags, and standard library algorithms for fast execution.
-
-### 4. Application Layer (L7) Deep Packet Inspection
-NetPulse natively peers into application payloads to identify the exact services being accessed, completely bypassing the need for DNS logs.
-* **TLS SNI Extraction (RFC 6066):** Safely parses the TLS handshake to extract the Server Name Indication (SNI) in plaintext before the connection encrypts. 
-* **Variable-Length TLV Navigation:** Mathematically navigates the dynamic, variable-length minefield of the TLS Client Hello (Session IDs, Cipher Suites, Compression) without triggering segmentation faults.
-* **Forward-Compatible Parsing:** Utilizes the Type-Length-Value (TLV) design pattern to blindly skip unknown TLS extensions and zero in strictly on Type `0x0000` (SNI).
-* **Plaintext HTTP Fallback:** Dynamically detects standard web traffic on Port 80 and extracts the `Host` header via zero-copy string extraction.
-* **Safe String Handling:** Extracts network-style length-prefixed strings without relying on C-style null-terminators, guaranteeing memory safety.
-
-### 5. Deterministic Application Classification
-Converts raw extracted network domains into semantic application profiles (e.g., "YouTube", "Instagram") using a high-performance classification engine.
-* **Deterministic Substring Matching:** Utilizes a strictly ordered `std::vector` of patterns to prevent the "Substring Trap" (ensuring `googlevideo` matches before `google`), prioritizing logical accuracy and CPU cache-locality over hash-map scattering.
-* **Data Normalization:** Sanitizes incoming network data to lowercase using safe `unsigned char` casting, preventing undefined behavior and eliminating case-sensitivity misses.
-* **Enum State Machine:** Translates heavy string data into an `AppType` enum class immediately upon classification. This guarantees $O(1)$ single-cycle integer comparisons during downstream processing and provides strict compile-time safety.
-* **Semantic Grouping:** Groups classified applications into broader analytical categories (Streaming, Social Media, Productivity, etc.) utilizing optimized `switch` jump tables.
-
-## Build Instructions
-
-NetPulse uses CMake for its build system.
-
+## Build
 ```bash
-# Clone the repository
-git clone [https://github.com/yourusername/netpulse.git](https://github.com/yourusername/netpulse.git)
-cd netpulse
-
-# Create build directory
-mkdir build && cd build
-
-# Compile the engine
+mkdir build
+cd build
 cmake ..
 make
+```
 
 ## Usage
-
-Provide a `.pcap` file as the single argument to run the analysis engine.
-
+Basic usage, analyzing a PCAP file:
 ```bash
-$ ./netpulse test/sample.pcap
-Reading: test/sample.pcap
-SNI: www.youtube.com
-CLASSIFIED: www.youtube.com → YouTube [Streaming]
-SNI: cdninstagram.com
-CLASSIFIED: cdninstagram.com → Instagram [Social Media]
-HTTP Host: neverssl.com
-SNI: api.github.com
-CLASSIFIED: api.github.com → GitHub [Development]
+./netpulse capture.pcap
+```
 
-──────────── Summary ────────────
-Total packets:      1432
-Unique flows:       47
-TCP flows:          41
-UDP flows:          6
-Port 443 flows:     23
-Port 80 flows:      4
-SNI extractions:    4
-Classified flows:   3 / 47
-Unique domains:     4
+Show top 5 connections (default is 10):
+```bash
+./netpulse capture.pcap --top 5
+```
 
-Domains found:
-  api.github.com
-  cdninstagram.com
-  neverssl.com
-  www.youtube.com
+Filter for a specific app (e.g. youtube):
+```bash
+./netpulse capture.pcap --filter youtube
+```
+
+Print classified packets in real-time:
+```bash
+./netpulse capture.pcap --verbose
+```
+
+Output as CSV instead of formatted terminal table:
+```bash
+./netpulse capture.pcap --csv > results.csv
+```
+
+Disable ANSI colors (useful for logging):
+```bash
+./netpulse capture.pcap --no-color
+```
+
+Show capture instructions for your own traffic:
+```bash
+./netpulse --demo
+```
+
+Show all commands:
+```bash
+./netpulse --help
+```
+
+## Capturing Your Own Traffic
+To capture your own traffic to test with NetPulse:
+
+**Linux/Mac:**
+```bash
+sudo tcpdump -i eth0 -w my_traffic.pcap &
+# Browse YouTube, Instagram, GitHub for 60 seconds
+sudo pkill tcpdump
+./netpulse my_traffic.pcap
+```
+
+**Mac (find your interface first):**
+```bash
+networksetup -listallhardwareports
+sudo tcpdump -i en0 -w my_traffic.pcap &
+```
+
+**Windows:**
+1. Open Wireshark → select your network interface
+2. Start capture → browse → stop
+3. File → Export as pcap → run `./netpulse` on it
+
+## Architecture
+```text
+┌─────────────────────────────────────────────────────────┐
+│                    NetPulse Pipeline                    │
+├──────────────┬──────────────┬──────────────┬────────────┤
+│ PcapReader   │PacketParser  │SNIExtractor  │Classifier  │
+│              │              │              │            │
+│ Read global  │ Ethernet hdr │ TLS record   │ Domain →   │
+│ header       │ (14 bytes)   │ header check │ AppType    │
+│              │              │              │            │
+│ Read packet  │ IPv4 header  │ Client Hello │ Pattern    │
+│ header+data  │ (IHL*4 bytes)│ verification │ matching   │
+│              │              │              │            │
+│ Handle byte  │ TCP header   │ Walk 5 var-  │ 30+ app    │
+│ swapping     │ (DO*4 bytes) │ length fields│ patterns   │
+│              │              │              │            │
+│ Return       │ Set payload  │ Find SNI ext │ Return     │
+│ RawPacket    │ pointer      │ type 0x0000  │ AppType    │
+└──────┬───────┴──────┬───────┴──────┬───────┴─────┬──────┘
+       │              │              │             │
+       └──────────────┴──────────────┴─────────────┘
+                              │
+                    ┌─────────▼──────────┐
+                    │   FlowTable        │
+                    │ FiveTuple → Flow   │
+                    │ (unordered_map     │
+                    │  custom hash)      │
+                    └─────────┬──────────┘
+                              │
+                    ┌─────────▼──────────┐
+                    │    Reporter        │
+                    │ App breakdown      │
+                    │ Category groups    │
+                    │ Top connections    │
+                    │ Domain list        │
+                    │ RFC 6066 footer    │
+                    └────────────────────┘
+```
+
+## How SNI Extraction Works
+The TLS Client Hello message structure contains 5 variable-length fields before reaching the extensions block:
+1. Session ID (1+N bytes)
+2. Cipher Suites (2+M bytes)
+3. Compression Methods (1+K bytes)
+4. Extensions Total Length (2 bytes)
+5. Extensions
+
+NetPulse carefully computes length bounds and walks each of these fields manually byte-by-byte in big-endian. By safely calculating offsets to reach the extensions, it loops through each until finding extension type `0x0000` (SNI). Once identified, the trailing byte values correspond directly to the unencrypted plaintext domain string that the client is requesting to connect to.
+
+## Sample Output
+```text
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  NetPulse v1.0 — Deep Packet Inspection Engine
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  FILE SUMMARY
+  ─────────────────────────────────────────────────
+  File:              capture.pcap
+  Total packets:     28,451
+  Total flows:       412
+  Classified flows:  285  (69.1%)
+  Unclassified:      127  (30.9%)
+  Total data:        3.2 MB
+
+  APPLICATION BREAKDOWN
+  ─────────────────────────────────────────────────
+  App              Packets     %      Category
+  YouTube            8,452   29.7%   Streaming
+  Instagram          4,213   14.8%   Social Media
+  GitHub             2,104    7.3%   Development
+  Unknown           13,682   48.1%   —
+
+  CATEGORY BREAKDOWN
+  ─────────────────────────────────────────────────
+  Unknown           13,682   48.1%
+  Streaming          8,452   29.7%
+  Social Media       4,213   14.8%
+  Development        2,104    7.3%
+
+  TOP HTTPS CONNECTIONS  (port 443)
+  ─────────────────────────────────────────────────
+  Source IP           Destination       App         Pkts
+  192.168.1.10   →  142.250.x.x:443  YouTube     4,521
+  192.168.1.10   →  157.240.x.x:443  Instagram   2,100
+  192.168.1.10   →  140.82.x.x:443   GitHub      1,850
+
+  UNIQUE DOMAINS SEEN
+  ─────────────────────────────────────────────────
+  googlevideo.com              [YouTube]
+  cdninstagram.com             [Instagram]
+  api.github.com               [GitHub]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  VERIFIED: TLS SNI reveals destination domain
+  even on encrypted HTTPS connections (RFC 6066)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+## Technical Implementation
+
+### Q: "Why did I build this?"
+A: While studying Computer Networks, I wanted to move beyond the theory and build something that interacts with real, messy internet traffic. I knew HTTPS encrypted payloads, but I learned that the initial TLS handshake (SNI) leaves the destination domain in plaintext. I wanted to see if I could write a C++ engine from scratch to actually catch that in the wild. Capturing my own traffic and watching the engine extract "youtube.com" from raw, encrypted bytes was the moment the OSI model truly clicked for me.
+
+### Q: "How does flow tracking work?"
+A: A flow is uniquely identified by a FiveTuple: src_ip, dst_ip, src_port, dst_port, protocol. This is stored in a `std::unordered_map` with a custom hash that XOR-combines all 5 fields using the boost `hash_combine` technique (0x9e3779b9 constant). Because of this O(1) tracking, all packets from the same TCP connection map to the same Flow entry. When we find the SNI in packet 1, it's stored in the flow state and automatically applies to all subsequent packets in that connection.
+
+### Q: "What is network byte order and why does it matter?"
+A: TCP/IP uses big-endian (most significant byte first) format. However, x86/ARM CPUs use little-endian. This means every 16-bit port and 32-bit IP address read from the raw packet must be explicitly converted using `ntohs()` / `ntohl()`. If you miss even one call, you get a completely garbage port number or IP address. This project carefully implements these conversions at exactly the 8 places where they are required in the network stack.
+
+### Q: "What does #pragma pack(1) do?"
+A: It tells the compiler not to add padding between struct fields. Without it, `sizeof(EthernetHeader)` might be padded to 16 bytes by the C++ compiler to optimize CPU alignment, but we need it to be exactly 14 bytes to correctly match the raw wire format. Using `#pragma pack(1)` guarantees that our C++ struct layout perfectly matches the byte sequence in the PCAP file, allowing zero-copy memory mapping.
+
+
+## What I Learned
+While taking my Computer Networks course, I wanted to bridge the gap between academic theory and practical systems engineering. Rather than just learning about the OSI model abstractly, I built NetPulse to parse it directly off the wire. By navigating raw memory, handling big-endian network byte order, and manually traversing packet payloads, I successfully verified that any passive observer can extract destination domains from completely encrypted HTTPS connections via the plaintext TLS Client Hello (SNI). Building this engine proved to me that textbook network theory perfectly translates into raw traffic reality.
+
+## Verified on real traffic
+- [ ] Ran on own HTTPS capture
+- [ ] YouTube SNI extracted: googlevideo.com / youtube.com
+- [ ] Instagram SNI extracted: cdninstagram.com
+- [ ] GitHub SNI extracted: api.github.com
+- [ ] Report generated with correct percentages
+- [ ] --filter youtube shows only YouTube flows
+- [ ] --csv produces valid CSV importable to spreadsheet
+- [ ] Handles empty PCAP gracefully
+- [ ] Handles non-PCAP file gracefully

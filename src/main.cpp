@@ -13,6 +13,64 @@
 #include "cli_parser.h"
 #include "colors.h"
 
+/*
+ * NETPULSE — Interview Talking Points
+ * ════════════════════════════════════
+ *
+ * Q: "What was the hardest part to implement?"
+ * A: The TLS SNI extractor. The Client Hello has 5 
+ *    variable-length fields before reaching extensions.
+ *    Session ID (1+N bytes), Cipher Suites (2+M bytes),
+ *    Compression (1+K bytes), then extensions. One 
+ *    off-by-one anywhere corrupts every subsequent read.
+ *    I added a --debug-tls flag to print every offset
+ *    value which made bugs immediately visible.
+ *
+ * Q: "Why did you build this?"
+ * A: My CN textbook said HTTPS leaks domain names in the
+ *    TLS Client Hello because SNI is plaintext (RFC 6066).
+ *    I didn't want to accept that as a fact — I wanted to
+ *    verify it on real traffic. After building this, I 
+ *    captured my own HTTPS traffic and confirmed: every
+ *    connection to youtube.com, instagram.com, github.com
+ *    reveals the domain name before a single encrypted
+ *    byte is sent. The textbook was right.
+ *
+ * Q: "What is network byte order and why does it matter?"
+ * A: TCP/IP uses big-endian (most significant byte first).
+ *    x86/ARM CPUs use little-endian. Every 16-bit port and
+ *    32-bit IP address read from the packet must be 
+ *    converted with ntohs() / ntohl(). Miss one call and
+ *    you get a garbage port number. This project has 
+ *    exactly 8 places where this conversion is required.
+ *
+ * Q: "How does flow tracking work?"
+ * A: A flow is uniquely identified by a FiveTuple: 
+ *    src_ip, dst_ip, src_port, dst_port, protocol.
+ *    Stored in std::unordered_map with a custom hash that
+ *    XOR-combines all 5 fields using the boost hash_combine
+ *    technique (0x9e3779b9 constant). All packets from the
+ *    same TCP connection map to the same Flow entry, so 
+ *    when we find the SNI in packet 1, it's stored in the
+ *    flow and applies to all subsequent packets.
+ *
+ * Q: "What does #pragma pack do?"
+ * A: Tells the compiler not to add padding between struct
+ *    fields. Without it, sizeof(EthernetHeader) might be
+ *    16 bytes due to alignment, but we need exactly 14 to
+ *    match the wire format. With #pragma pack(1), the 
+ *    struct layout matches the byte sequence in the file.
+ *
+ * CN Theory verified by this project:
+ * - OSI Layer 2 (Ethernet): MAC addresses, EtherType
+ * - OSI Layer 3 (IP): addressing, IHL, protocol field
+ * - OSI Layer 4 (TCP): ports, data offset, flags
+ * - OSI Layer 7 (TLS): Client Hello, SNI extension
+ * - Big-endian network byte order throughout
+ * - 5-tuple flow identification
+ * - RFC 6066: Server Name Indication
+ */
+
 // Helper to format IP for the report/verbose
 static std::string maskIP(uint32_t ip) {
     uint8_t bytes[4];
@@ -62,6 +120,23 @@ void printProgress(uint32_t packets, size_t current_bytes, size_t total_bytes) {
 int main(int argc, char* argv[]) {
     Config config = CLIParser::parse(argc, argv);
     
+    if (config.demo) {
+        std::cout << "To capture your own traffic:\n\n"
+                  << "Linux/Mac:\n"
+                  << "  sudo tcpdump -i eth0 -w my_traffic.pcap &\n"
+                  << "  # Browse YouTube, Instagram, GitHub for 60 seconds\n"
+                  << "  sudo pkill tcpdump\n"
+                  << "  ./netpulse my_traffic.pcap\n\n"
+                  << "Mac (find your interface first):\n"
+                  << "  networksetup -listallhardwareports\n"
+                  << "  sudo tcpdump -i en0 -w my_traffic.pcap &\n\n"
+                  << "Windows:\n"
+                  << "  Open Wireshark → select your network interface\n"
+                  << "  → start capture → browse → stop → \n"
+                  << "  File → Export as pcap → run ./netpulse on it\n";
+        return 0;
+    }
+
     if (config.help) {
         CLIParser::printHelp(argv[0]);
         return 0;

@@ -5,7 +5,7 @@
 bool CLIParser::isValidFlag(const std::string& flag) {
     return flag == "--top" || flag == "--verbose" || flag == "--csv" || 
            flag == "--filter" || flag == "--help" || flag == "-h" ||
-           flag == "--no-color";
+           flag == "--no-color" || flag == "--demo";
 }
 
 Config CLIParser::parse(int argc, char* argv[]) {
@@ -19,6 +19,11 @@ Config CLIParser::parse(int argc, char* argv[]) {
     std::string first_arg = argv[1];
     if (first_arg == "--help" || first_arg == "-h") {
         config.help = true;
+        return config;
+    }
+    
+    if (first_arg == "--demo") {
+        config.demo = true;
         return config;
     }
 
@@ -46,6 +51,9 @@ Config CLIParser::parse(int argc, char* argv[]) {
             }
         } else if (arg == "--no-color") {
             config.no_color = true;
+        } else if (arg == "--demo") {
+            config.demo = true;
+            return config;
         } else {
             std::cerr << "Warning: Unknown flag " << arg << "\n";
         }
@@ -67,9 +75,46 @@ void CLIParser::printHelp(const std::string& program_name) {
               << "                 (youtube, instagram, github, netflix, etc.)\n"
               << "  --csv          Output as CSV instead of formatted table\n"
               << "  --no-color     Disable all ANSI color codes\n"
+              << "  --demo         Show instructions for capturing your own traffic\n"
               << "  --help, -h     Show this help message\n\n"
               << "Examples:\n"
               << "  " << program_name << " capture.pcap\n"
               << "  " << program_name << " capture.pcap --filter youtube --top 5\n"
-              << "  " << program_name << " capture.pcap --csv > results.csv\n";
+              << "  " << program_name << " capture.pcap --csv > results.csv\n\n"
+              << "Architecture:\n"
+              << "┌─────────────────────────────────────────────────────────┐\n"
+              << "│                    NetPulse Pipeline                    │\n"
+              << "├──────────────┬──────────────┬──────────────┬────────────┤\n"
+              << "│ PcapReader   │PacketParser  │SNIExtractor  │Classifier  │\n"
+              << "│              │              │              │            │\n"
+              << "│ Read global  │ Ethernet hdr │ TLS record   │ Domain →   │\n"
+              << "│ header       │ (14 bytes)   │ header check │ AppType    │\n"
+              << "│              │              │              │            │\n"
+              << "│ Read packet  │ IPv4 header  │ Client Hello │ Pattern    │\n"
+              << "│ header+data  │ (IHL*4 bytes)│ verification │ matching   │\n"
+              << "│              │              │              │            │\n"
+              << "│ Handle byte  │ TCP header   │ Walk 5 var-  │ 30+ app    │\n"
+              << "│ swapping     │ (DO*4 bytes) │ length fields│ patterns   │\n"
+              << "│              │              │              │            │\n"
+              << "│ Return       │ Set payload  │ Find SNI ext │ Return     │\n"
+              << "│ RawPacket    │ pointer      │ type 0x0000  │ AppType    │\n"
+              << "└──────┬───────┴──────┬───────┴──────┬───────┴─────┬──────┘\n"
+              << "       │              │              │             │\n"
+              << "       └──────────────┴──────────────┴─────────────┘\n"
+              << "                              │\n"
+              << "                    ┌─────────▼──────────┐\n"
+              << "                    │   FlowTable        │\n"
+              << "                    │ FiveTuple → Flow   │\n"
+              << "                    │ (unordered_map     │\n"
+              << "                    │  custom hash)      │\n"
+              << "                    └─────────┬──────────┘\n"
+              << "                              │\n"
+              << "                    ┌─────────▼──────────┐\n"
+              << "                    │    Reporter        │\n"
+              << "                    │ App breakdown      │\n"
+              << "                    │ Category groups    │\n"
+              << "                    │ Top connections    │\n"
+              << "                    │ Domain list        │\n"
+              << "                    │ RFC 6066 footer    │\n"
+              << "                    └────────────────────┘\n";
 }
