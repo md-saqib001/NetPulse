@@ -1,0 +1,48 @@
+name: Build and Release NetPulse
+
+# 1. THE TRIGGER: This tells GitHub to only run this script when you push a version tag (like v1.0)
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    # 2. THE MATRIX: This boots up three different cloud computers simultaneously
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+    - name: Download Code
+      uses: actions/checkout@v4
+
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Compile C++ Code
+      run: cmake --build build --config Release
+
+    # 3. RENAME & PACKAGE: Windows adds .exe, Mac/Linux do not. We standardize the names here.
+    - name: Prepare Executable (Linux/Mac)
+      if: runner.os != 'Windows'
+      run: |
+        mv build/netpulse netpulse-${{ runner.os }}
+        chmod +x netpulse-${{ runner.os }}
+
+    - name: Prepare Executable (Windows)
+      if: runner.os == 'Windows'
+      run: move build\Release\netpulse.exe netpulse-Windows.exe
+
+    # 4. UPLOAD: This officially attaches the compiled files to your GitHub Release page
+    - name: Upload Binaries to Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          netpulse-Linux
+          netpulse-macOS
+          netpulse-Windows.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
