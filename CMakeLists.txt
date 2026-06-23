@@ -23,7 +23,12 @@ if(WIN32)
     target_link_libraries(netpulse ws2_32)
 endif()
 
-# Enable compiler warnings
-target_compile_options(netpulse PRIVATE -Wall -Wextra)
+if(MSVC)
+    # Microsoft compiler uses /W4 for high warnings
+    add_compile_options(/W4)
+else()
+    # GCC/Clang use -Wall -Wextra
+    add_compile_options(-Wall -Wextra)
+endif()
 
 # Note: Set CMAKE_BUILD_TYPE to Debug or Release when configuring the project
