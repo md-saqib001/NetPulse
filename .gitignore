@@ -45,6 +45,8 @@ Build/
 build-*/
 cmake-build-*/
 out/
+build-windows/
+build-linux/
 
 # CMake generated files
 CMakeFiles/

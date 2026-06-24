@@ -14,7 +14,7 @@ const std::vector<std::pair<std::string, AppType>> Classifier::PATTERNS = {
     {"whatsapp",           AppType::WHATSAPP},
     {"twimg",              AppType::TWITTER},
     {"twitter",            AppType::TWITTER},
-    {"t.co",               AppType::TWITTER},
+    {"x.com",              AppType::TWITTER},
     {"nflxvideo",          AppType::NETFLIX},
     {"netflix",            AppType::NETFLIX},
     {"hotstar",            AppType::HOTSTAR},
@@ -39,7 +39,20 @@ const std::vector<std::pair<std::string, AppType>> Classifier::PATTERNS = {
     {"maps.google",        AppType::MAPS},
     {"8.8.8.8",            AppType::DNS_GOOGLE},
     {"1.1.1.1",            AppType::DNS_CLOUDFLARE},
-    {"google",             AppType::GOOGLE}
+    {"google",             AppType::GOOGLE},
+    {"codechef",           AppType::CODECHEF},
+    {"codeforces",         AppType::CODEFORCES},
+    {"leetcode",           AppType::LEETCODE},
+    {"atcoder",            AppType::ATCODER},
+    {"snapchat",           AppType::SNAPCHAT},
+    {"sc-cdn",             AppType::SNAPCHAT},
+    {"brave",              AppType::BRAVE},
+    {"microsoft",          AppType::MICROSOFT},
+    {"sonyliv",            AppType::SONYLIV},
+    {"anthropic",          AppType::ANTHROPIC},
+    {"chatgpt",            AppType::CHATGPT},
+    {"openai",             AppType::CHATGPT},
+    {"gemini",             AppType::GEMINI}
 };
 
 AppType Classifier::classify(const std::string& sni) const {
@@ -90,6 +103,17 @@ std::string Classifier::appName(AppType type) const {
         case AppType::ZOMATO:          return "Zomato";
         case AppType::DNS_GOOGLE:      return "Google DNS";
         case AppType::DNS_CLOUDFLARE:  return "Cloudflare DNS";
+        case AppType::CODECHEF:        return "CodeChef";
+        case AppType::CODEFORCES:      return "Codeforces";
+        case AppType::LEETCODE:        return "LeetCode";
+        case AppType::ATCODER:         return "AtCoder";
+        case AppType::SNAPCHAT:        return "Snapchat";
+        case AppType::BRAVE:           return "Brave Browser";
+        case AppType::MICROSOFT:       return "Microsoft";
+        case AppType::SONYLIV:         return "SonyLIV";
+        case AppType::ANTHROPIC:       return "Anthropic";
+        case AppType::CHATGPT:         return "ChatGPT";
+        case AppType::GEMINI:          return "Gemini";
     }
     return "Unknown";
 }
@@ -101,11 +125,13 @@ std::string Classifier::category(AppType type) const {
         case AppType::HOTSTAR:
         case AppType::AMAZON_PRIME:
         case AppType::SPOTIFY:
+        case AppType::SONYLIV:
             return "Streaming";
         case AppType::INSTAGRAM:
         case AppType::FACEBOOK:
         case AppType::TWITTER:
         case AppType::LINKEDIN:
+        case AppType::SNAPCHAT:
             return "Social Media";
         case AppType::WHATSAPP:
         case AppType::TELEGRAM:
@@ -125,6 +151,15 @@ std::string Classifier::category(AppType type) const {
         case AppType::GMAIL:
         case AppType::DRIVE:
         case AppType::MAPS:
+        case AppType::BRAVE:
+        case AppType::MICROSOFT:
+        case AppType::ANTHROPIC:
+        case AppType::CHATGPT:
+        case AppType::GEMINI:
+        case AppType::CODECHEF:
+        case AppType::CODEFORCES:
+        case AppType::LEETCODE:
+        case AppType::ATCODER:
             return "Productivity";
         default:
             return "Unknown";

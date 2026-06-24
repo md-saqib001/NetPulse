@@ -96,8 +96,17 @@ void Reporter::generate(const Config& config,
     Classifier classifier;
 
     uint32_t classified_flows = 0;
-    uint32_t unclassified_flows = 0;
+    uint32_t flows_with_domain = 0;
+    uint32_t flows_without_domain = 0;
+    uint32_t unrecognized_domain_flows = 0;
     uint32_t filtered_flows_count = 0;
+
+    uint32_t tcp_flows = 0;
+    uint32_t udp_flows = 0;
+    uint32_t other_flows = 0;
+    uint64_t tcp_packets = 0;
+    uint64_t udp_packets = 0;
+    uint64_t other_packets = 0;
 
     struct AppStat {
         std::string name;
@@ -106,7 +115,7 @@ void Reporter::generate(const Config& config,
         uint64_t bytes = 0;
         AppType type;
     };
-    std::map<AppType, AppStat> app_stats;
+    std::map<std::string, AppStat> app_stats;
 
     struct CatStat {
         uint64_t packets = 0;
@@ -117,11 +126,15 @@ void Reporter::generate(const Config& config,
         uint32_t src_ip;
         uint32_t dst_ip;
         uint16_t dst_port;
+        uint64_t tcp_packets = 0;
+        uint64_t udp_packets = 0;
         std::string app_name;
-        uint64_t packets;
         AppType type;
+        std::string sni;
+        uint64_t total_packets() const { return tcp_packets + udp_packets; }
     };
     std::vector<TopConn> top_https;
+    std::vector<TopConn> top_http;
 
     struct UniqueDomain {
         std::string domain;
@@ -143,33 +156,83 @@ void Reporter::generate(const Config& config,
         
         filtered_flows_count++;
 
-        if (flow.classified) {
-            classified_flows++;
+        if (tuple.protocol == 6) {
+            tcp_flows++;
+            tcp_packets += flow.packet_count;
+        } else if (tuple.protocol == 17) {
+            udp_flows++;
+            udp_packets += flow.packet_count;
         } else {
-            unclassified_flows++;
+            other_flows++;
+            other_packets += flow.packet_count;
         }
 
-        if (app_stats.find(flow.app_type) == app_stats.end()) {
-            app_stats[flow.app_type].name = app_name;
-            app_stats[flow.app_type].category = classifier.category(flow.app_type);
-            app_stats[flow.app_type].type = flow.app_type;
+        if (!flow.sni.empty()) {
+            flows_with_domain++;
+            if (flow.classified) {
+                classified_flows++;
+            } else {
+                unrecognized_domain_flows++;
+            }
+        } else {
+            flows_without_domain++;
         }
-        app_stats[flow.app_type].packets += flow.packet_count;
-        app_stats[flow.app_type].bytes += flow.byte_count;
+
+        std::string stat_key;
+        std::string display_name;
+        if (flow.app_type != AppType::UNKNOWN) {
+            display_name = app_name;
+            stat_key = app_name;
+        } else if (!flow.sni.empty()) {
+            display_name = "Unrecognized Domain";
+            stat_key = "Unrecognized Domain";
+        } else {
+            display_name = "Unknown (Raw IP)";
+            stat_key = "Unknown (Raw IP)";
+        }
+
+        if (app_stats.find(stat_key) == app_stats.end()) {
+            app_stats[stat_key].name = display_name;
+            app_stats[stat_key].category = classifier.category(flow.app_type);
+            app_stats[stat_key].type = flow.app_type;
+        }
+        app_stats[stat_key].packets += flow.packet_count;
+        app_stats[stat_key].bytes += flow.byte_count;
 
         std::string cat = classifier.category(flow.app_type);
         cat_stats[cat].packets += flow.packet_count;
 
-        if (tuple.dst_port == 443 || tuple.src_port == 443) {
+        if (tuple.dst_port == 443 || tuple.src_port == 443 || tuple.dst_port == 80 || tuple.src_port == 80) {
             uint32_t src = tuple.src_ip;
             uint32_t dst = tuple.dst_ip;
             uint16_t dport = tuple.dst_port;
-            if (tuple.src_port == 443) {
+            if (tuple.src_port == 443 || tuple.src_port == 80) {
                  src = tuple.dst_ip;
                  dst = tuple.src_ip;
                  dport = tuple.src_port;
             }
-            top_https.push_back({src, dst, dport, app_name, flow.packet_count, flow.app_type});
+            auto& target_vec = (dport == 443) ? top_https : top_http;
+            bool found = false;
+            for (auto& conn : target_vec) {
+                if (conn.src_ip == src && conn.dst_ip == dst && conn.dst_port == dport && conn.sni == flow.sni) {
+                    if (tuple.protocol == 6) conn.tcp_packets += flow.packet_count;
+                    else if (tuple.protocol == 17) conn.udp_packets += flow.packet_count;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                TopConn new_conn;
+                new_conn.src_ip = src;
+                new_conn.dst_ip = dst;
+                new_conn.dst_port = dport;
+                if (tuple.protocol == 6) new_conn.tcp_packets = flow.packet_count;
+                else if (tuple.protocol == 17) new_conn.udp_packets = flow.packet_count;
+                new_conn.app_name = app_name;
+                new_conn.type = flow.app_type;
+                new_conn.sni = flow.sni;
+                target_vec.push_back(new_conn);
+            }
         }
 
         if (!flow.sni.empty()) {
@@ -203,7 +266,12 @@ void Reporter::generate(const Config& config,
 
     std::sort(top_https.begin(), top_https.end(),
         [](const auto& a, const auto& b){
-            return a.packets > b.packets;
+            return a.total_packets() > b.total_packets();
+        });
+
+    std::sort(top_http.begin(), top_http.end(),
+        [](const auto& a, const auto& b){
+            return a.total_packets() > b.total_packets();
         });
 
     std::sort(unique_domains.begin(), unique_domains.end(),
@@ -238,11 +306,35 @@ void Reporter::generate(const Config& config,
     std::cout << "  File:              " << config.filename << "\n";
     std::cout << "  Total packets:     " << formatCount(total_packets) << "\n";
     std::cout << "  Total flows:       " << formatCount(filtered_flows_count) << "\n";
-    std::cout << "  Classified flows:  " << formatCount(classified_flows) << "  (" 
-              << colorizePct(pct(classified_flows, filtered_flows_count)) << ")\n";
-    std::cout << "  Unclassified:      " << formatCount(unclassified_flows) << "  (" 
-              << colorizePct(pct(unclassified_flows, filtered_flows_count)) << ")\n";
+    std::cout << "  Flows with Domain: " << formatCount(flows_with_domain) << "  (" 
+              << colorizePct(pct(flows_with_domain, filtered_flows_count)) << ")\n";
+    if (flows_with_domain > 0) {
+        std::cout << "    ├─ Classified:   " << formatCount(classified_flows) << "  (" 
+                  << colorizePct(pct(classified_flows, flows_with_domain)) << ")\n";
+        std::cout << "    └─ Unrecognized: " << formatCount(unrecognized_domain_flows) << "  (" 
+                  << colorizePct(pct(unrecognized_domain_flows, flows_with_domain)) << ")\n";
+    }
+    std::cout << "  Flows w/o Domain:  " << formatCount(flows_without_domain) << "  (" 
+              << colorizePct(pct(flows_without_domain, filtered_flows_count)) << ")\n";
     std::cout << "  Total data:        " << formatBytes(total_bytes) << "\n\n";
+
+    std::cout << "  PROTOCOL BREAKDOWN\n";
+    std::cout << "  ─────────────────────────────────────────────────\n";
+    std::cout << "  " << std::left << std::setw(17) << "Protocol" 
+              << std::right << std::setw(7) << "Flows" 
+              << std::setw(12) << "Packets" << "\n";
+
+    auto printProto = [&](const std::string& name, uint32_t f, uint64_t p) {
+        if (f > 0) {
+            std::cout << "  " << std::left << std::setw(17) << name
+                      << std::right << std::setw(7 + (useColors ? Colors::WHITE.length() + Colors::BOLD.length() + Colors::RESET.length() : 0)) << formatCount(f)
+                      << std::setw(12 + (useColors ? Colors::WHITE.length() + Colors::BOLD.length() + Colors::RESET.length() : 0)) << formatCount(p) << "\n";
+        }
+    };
+    printProto("TCP", tcp_flows, tcp_packets);
+    printProto("UDP", udp_flows, udp_packets);
+    printProto("Other", other_flows, other_packets);
+    std::cout << "\n";
 
     std::cout << "  APPLICATION BREAKDOWN\n";
     std::cout << "  ─────────────────────────────────────────────────\n";
@@ -280,28 +372,91 @@ void Reporter::generate(const Config& config,
     }
     std::cout << "\n";
 
-    std::cout << "  TOP HTTPS CONNECTIONS  (port 443)\n";
-    std::cout << "  ─────────────────────────────────────────────────\n";
-    std::cout << "  " << std::left << std::setw(20) << "Source IP" 
-              << std::setw(18) << "Destination" 
-              << std::setw(12) << "App" 
-              << "Pkts\n";
-    int https_count = 0;
-    for (const auto& conn : top_https) {
-        if (https_count >= config.top_n) break; // limit to top_n
-        std::string src_str = ipToString(conn.src_ip);
-        std::string dst_str = maskIP(conn.dst_ip) + ":" + std::to_string(conn.dst_port);
-        
-        std::string app_name_c = colorizeApp(conn.app_name, conn.type);
-        int color_len = useColors ? (conn.type == AppType::UNKNOWN ? Colors::GRAY.length() : Colors::GREEN.length()) + Colors::RESET.length() : 0;
+    if (!top_https.empty()) {
+        std::cout << "  TOP HTTPS CONNECTIONS  (port 443)\n";
+        std::cout << "  ───────────────────────────────────────────────────────────────────────────────\n";
+        std::cout << "  " << std::left << std::setw(18) << "Source IP" 
+                  << std::setw(18) << "Destination" 
+                  << std::setw(28) << "Domain (SNI)"
+                  << std::setw(15) << "App" 
+                  << std::right << std::setw(10) << "Total Pkts" 
+                  << std::setw(10) << "TCP Pkts" 
+                  << std::setw(10) << "UDP Pkts\n";
+        int https_count = 0;
+        for (const auto& conn : top_https) {
+            if (https_count >= config.top_n) break; // limit to top_n
+            std::string src_str = ipToString(conn.src_ip);
+            std::string dst_str = maskIP(conn.dst_ip) + ":" + std::to_string(conn.dst_port);
+            
+            std::string app_name_c = colorizeApp(conn.app_name, conn.type);
+            int app_color_len = useColors ? (conn.type == AppType::UNKNOWN ? Colors::GRAY.length() : Colors::GREEN.length()) + Colors::RESET.length() : 0;
 
-        std::cout << "  " << std::left << std::setw(15) << src_str 
-                  << "→  " << std::setw(17) << dst_str 
-                  << std::setw(12 + color_len) << app_name_c 
-                  << formatCount(conn.packets) << "\n";
-        https_count++;
+            std::string sni_display = conn.sni;
+            if (sni_display.empty()) sni_display = "-";
+            if (sni_display.length() > 25) sni_display = sni_display.substr(0, 22) + "...";
+            std::string sni_c = c(Colors::CYAN, sni_display);
+            int sni_color_len = useColors ? Colors::CYAN.length() + Colors::RESET.length() : 0;
+
+            int fmt_len = useColors ? Colors::WHITE.length() + Colors::BOLD.length() + Colors::RESET.length() : 0;
+            std::string total_str = formatCount(conn.total_packets());
+            std::string tcp_str = conn.tcp_packets > 0 ? formatCount(conn.tcp_packets) : "-";
+            std::string udp_str = conn.udp_packets > 0 ? formatCount(conn.udp_packets) : "-";
+
+            std::cout << "  " << std::left << std::setw(15) << src_str 
+                      << "→  " << std::setw(17) << dst_str 
+                      << std::setw(28 + sni_color_len) << sni_c
+                      << std::setw(15 + app_color_len) << app_name_c 
+                      << std::right 
+                      << std::setw(10 + fmt_len) << total_str
+                      << std::setw(10 + (conn.tcp_packets > 0 ? fmt_len : 0)) << tcp_str
+                      << std::setw(10 + (conn.udp_packets > 0 ? fmt_len : 0)) << udp_str << "\n";
+            https_count++;
+        }
+        std::cout << "\n";
     }
-    std::cout << "\n";
+
+    if (!top_http.empty()) {
+        std::cout << "  TOP HTTP CONNECTIONS  (port 80)\n";
+        std::cout << "  ───────────────────────────────────────────────────────────────────────────────\n";
+        std::cout << "  " << std::left << std::setw(18) << "Source IP" 
+                  << std::setw(18) << "Destination" 
+                  << std::setw(28) << "Domain (Host)"
+                  << std::setw(15) << "App" 
+                  << std::right << std::setw(10) << "Total Pkts" 
+                  << std::setw(10) << "TCP Pkts" 
+                  << std::setw(10) << "UDP Pkts\n";
+        int http_count = 0;
+        for (const auto& conn : top_http) {
+            if (http_count >= config.top_n) break; // limit to top_n
+            std::string src_str = ipToString(conn.src_ip);
+            std::string dst_str = maskIP(conn.dst_ip) + ":" + std::to_string(conn.dst_port);
+            
+            std::string app_name_c = colorizeApp(conn.app_name, conn.type);
+            int app_color_len = useColors ? (conn.type == AppType::UNKNOWN ? Colors::GRAY.length() : Colors::GREEN.length()) + Colors::RESET.length() : 0;
+
+            std::string sni_display = conn.sni;
+            if (sni_display.empty()) sni_display = "-";
+            if (sni_display.length() > 25) sni_display = sni_display.substr(0, 22) + "...";
+            std::string sni_c = c(Colors::CYAN, sni_display);
+            int sni_color_len = useColors ? Colors::CYAN.length() + Colors::RESET.length() : 0;
+
+            int fmt_len = useColors ? Colors::WHITE.length() + Colors::BOLD.length() + Colors::RESET.length() : 0;
+            std::string total_str = formatCount(conn.total_packets());
+            std::string tcp_str = conn.tcp_packets > 0 ? formatCount(conn.tcp_packets) : "-";
+            std::string udp_str = conn.udp_packets > 0 ? formatCount(conn.udp_packets) : "-";
+
+            std::cout << "  " << std::left << std::setw(15) << src_str 
+                      << "→  " << std::setw(17) << dst_str 
+                      << std::setw(28 + sni_color_len) << sni_c
+                      << std::setw(15 + app_color_len) << app_name_c 
+                      << std::right 
+                      << std::setw(10 + fmt_len) << total_str
+                      << std::setw(10 + (conn.tcp_packets > 0 ? fmt_len : 0)) << tcp_str
+                      << std::setw(10 + (conn.udp_packets > 0 ? fmt_len : 0)) << udp_str << "\n";
+            http_count++;
+        }
+        std::cout << "\n";
+    }
 
     std::cout << "  UNIQUE DOMAINS SEEN\n";
     std::cout << "  ─────────────────────────────────────────────────\n";

@@ -71,6 +71,16 @@
  * - RFC 6066: Server Name Indication
  */
 
+#include <csignal>
+#include <chrono>
+#include "live_capture.h"
+
+// For SIGINT handling
+bool capture_running = true;
+void signalHandler(int /*signum*/) {
+    capture_running = false;
+}
+
 // Helper to format IP for the report/verbose
 static std::string maskIP(uint32_t ip) {
     uint8_t bytes[4];
@@ -117,7 +127,26 @@ void printProgress(uint32_t packets, size_t current_bytes, size_t total_bytes) {
               << (int)percent << "%" << std::flush;
 }
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    // Set console code page to UTF-8 so console knowns how to decode string data
+    SetConsoleOutputCP(CP_UTF8);
+    
+    // Enable ANSI escape codes for colors
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut != INVALID_HANDLE_VALUE) {
+        DWORD dwMode = 0;
+        if (GetConsoleMode(hOut, &dwMode)) {
+            dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+            SetConsoleMode(hOut, dwMode);
+        }
+    }
+#endif
+
     Config config = CLIParser::parse(argc, argv);
     
     if (config.demo) {
@@ -146,18 +175,36 @@ int main(int argc, char* argv[]) {
         useColors = false;
     }
 
-    // Check file size for progress bar and empty check
-    std::ifstream file(config.filename, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        std::cerr << c(Colors::RED, "Error: cannot open file: " + config.filename) << "\n";
-        return 1;
-    }
-    size_t file_size = file.tellg();
-    file.close();
-
     PcapReader reader;
-    if (!reader.open(config.filename)) {
-        return 1;
+    LiveCapture live_capture;
+    size_t file_size = 0;
+
+    if (config.live_capture) {
+        if (config.interface_name.empty()) {
+            config.interface_name = LiveCapture::promptForInterface();
+            if (config.interface_name.empty()) {
+                std::cout << "Capture cancelled.\n";
+                return 0;
+            }
+        }
+
+        std::signal(SIGINT, signalHandler);
+        if (!live_capture.open(config.interface_name)) {
+            return 1;
+        }
+        std::cout << "Listening on " << config.interface_name << "...\n";
+    } else {
+        std::ifstream file(config.filename, std::ios::binary | std::ios::ate);
+        if (!file.is_open()) {
+            std::cerr << c(Colors::RED, "Error: cannot open file: " + config.filename) << "\n";
+            return 1;
+        }
+        file_size = file.tellg();
+        file.close();
+
+        if (!reader.open(config.filename)) {
+            return 1;
+        }
     }
 
     Classifier classifier;
@@ -167,87 +214,128 @@ int main(int argc, char* argv[]) {
     uint64_t total_bytes = 0;
     size_t current_file_pos = 24; // PCAP global header is 24 bytes
     ParseStats stats;
+    
+    auto last_status_time = std::chrono::steady_clock::now();
+    uint32_t classified_domains = 0;
 
-    while (reader.readNextPacket(packet)) {
-        total_count++;
-        current_file_pos += 16 + packet.data.size();
-
-        if (total_count % 5000 == 0) {
-            printProgress(total_count, current_file_pos, file_size);
-        }
-
-        ParsedPacket parsed;
-        if (!PacketParser::parse(packet, parsed, stats)) {
-            if (parsed.parse_error) {
-                // We increment parse_errors or short_packets inside parse()
+    while (capture_running) {
+        bool got_packet = false;
+        
+        if (config.live_capture) {
+            got_packet = live_capture.captureOne(packet);
+        } else {
+            got_packet = reader.readNextPacket(packet);
+            if (!got_packet) {
+                break; // End of file
             }
-            continue;
         }
 
-        FiveTuple tuple;
-        tuple.src_ip   = parsed.src_ip;
-        tuple.dst_ip   = parsed.dst_ip;
-        tuple.src_port = parsed.src_port;
-        tuple.dst_port = parsed.dst_port;
-        tuple.protocol = parsed.protocol;
+        if (config.live_capture && !got_packet) {
+            // Timeout, just loop again. Update status if needed.
+        }
 
-        Flow& flow = flows[tuple];
-        flow.packet_count++;
-        flow.byte_count += parsed.payload_len;
-        total_bytes += parsed.payload_len;
-
-        if (parsed.payload_len > 5 && flow.sni.empty())
-        {
-            bool extracted = false;
-            if (parsed.dst_port == 443 || parsed.src_port == 443)
-            {
-                auto sni = SNIExtractor::extractTLS(
-                    parsed.payload, parsed.payload_len);
-                if (sni.has_value()) {
-                    flow.sni        = sni.value();
-                    extracted       = true;
+        if (got_packet) {
+            total_count++;
+            if (!config.live_capture) {
+                current_file_pos += 16 + packet.data.size();
+                if (total_count % 5000 == 0) {
+                    printProgress(total_count, current_file_pos, file_size);
                 }
             }
-            else if (parsed.dst_port == 80 || parsed.src_port == 80)
+
+            ParsedPacket parsed;
+            if (!PacketParser::parse(packet, parsed, stats)) {
+                continue;
+            }
+
+            FiveTuple tuple;
+            tuple.src_ip   = parsed.src_ip;
+            tuple.dst_ip   = parsed.dst_ip;
+            tuple.src_port = parsed.src_port;
+            tuple.dst_port = parsed.dst_port;
+            tuple.protocol = parsed.protocol;
+
+            Flow& flow = flows[tuple];
+            flow.packet_count++;
+            flow.byte_count += parsed.payload_len;
+            total_bytes += parsed.payload_len;
+
+            if (parsed.payload_len > 5 && flow.sni.empty())
             {
-                if (SNIExtractor::isHTTPRequest(
-                        parsed.payload, parsed.payload_len))
+                bool extracted = false;
+                if (parsed.dst_port == 443 || parsed.src_port == 443)
                 {
-                    auto host = SNIExtractor::extractHTTPHost(
+                    auto sni = SNIExtractor::extractTLS(
                         parsed.payload, parsed.payload_len);
-                    if (host.has_value()) {
-                        flow.sni        = host.value();
+                    if (sni.has_value()) {
+                        flow.sni        = sni.value();
                         extracted       = true;
                     }
                 }
-            }
-
-            if (extracted) {
-                flow.app_type   = classifier.classify(flow.sni);
-                flow.app_name   = classifier.appName(flow.app_type);
-                flow.classified = (flow.app_type != AppType::UNKNOWN);
-
-                if (config.verbose) {
-                    std::string proto = tuple.protocol == 6 ? "TCP" : (tuple.protocol == 17 ? "UDP" : std::to_string(tuple.protocol));
-                    std::string app_c = flow.app_type == AppType::UNKNOWN ? c(Colors::GRAY, flow.app_name) : c(Colors::GREEN, flow.app_name);
-                    std::string dom_c = c(Colors::CYAN, flow.sni);
-                    std::cout << "\n→ [" << proto << "  " << ipToString(tuple.src_ip) << ":" << tuple.src_port 
-                              << " → " << maskIP(tuple.dst_ip) << ":" << tuple.dst_port << "]\n";
-                    std::cout << "  SNI: " << dom_c << " → " << app_c << " [" << classifier.category(flow.app_type) << "]\n";
+                else if (parsed.dst_port == 80 || parsed.src_port == 80)
+                {
+                    if (SNIExtractor::isHTTPRequest(
+                            parsed.payload, parsed.payload_len))
+                    {
+                        auto host = SNIExtractor::extractHTTPHost(
+                            parsed.payload, parsed.payload_len);
+                        if (host.has_value()) {
+                            flow.sni        = host.value();
+                            extracted       = true;
+                        }
+                    }
                 }
+
+                if (extracted) {
+                    flow.app_type   = classifier.classify(flow.sni);
+                    flow.app_name   = classifier.appName(flow.app_type);
+                    flow.classified = (flow.app_type != AppType::UNKNOWN);
+                    if (flow.classified) {
+                        classified_domains++;
+                    }
+
+                    if (config.verbose) {
+                        std::string proto = tuple.protocol == 6 ? "TCP" : (tuple.protocol == 17 ? "UDP" : std::to_string(tuple.protocol));
+                        std::string app_c = flow.app_type == AppType::UNKNOWN ? c(Colors::GRAY, flow.app_name) : c(Colors::GREEN, flow.app_name);
+                        std::string dom_c = c(Colors::CYAN, flow.sni);
+                        std::cout << "\n→ [" << proto << "  " << ipToString(tuple.src_ip) << ":" << tuple.src_port 
+                                  << " → " << maskIP(tuple.dst_ip) << ":" << tuple.dst_port << "]\n";
+                        std::cout << "  SNI: " << dom_c << " → " << app_c << " [" << classifier.category(flow.app_type) << "]\n";
+                    }
+                }
+            }
+        }
+
+        if (config.live_capture && !config.verbose) {
+            auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_status_time).count() >= 5) {
+                last_status_time = now;
+                std::string s_packets = std::to_string(total_count);
+                int insertPosition = s_packets.length() - 3;
+                while (insertPosition > 0) {
+                    s_packets.insert(insertPosition, ",");
+                    insertPosition -= 3;
+                }
+                std::cout << "\rCapturing... " << s_packets << " packets, " 
+                          << flows.size() << " flows, " 
+                          << classified_domains << " classified domains "
+                          << "[Ctrl+C to stop and see report]" << std::flush;
             }
         }
     }
 
-    if (total_count > 0) {
-        printProgress(total_count, file_size, file_size);
-        std::cout << "\n";
+    if (!config.live_capture) {
+        if (total_count > 0) {
+            printProgress(total_count, file_size, file_size);
+            std::cout << "\n";
+        } else {
+            std::cout << "\n";
+        }
+        reader.close();
     } else {
-        // Empty pcap case
-        std::cout << "\n";
+        std::cout << "\nStopping capture...\n";
+        live_capture.close();
     }
-
-    reader.close();
 
     Reporter reporter;
     if (config.csv_output) {

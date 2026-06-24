@@ -30,10 +30,11 @@ else()
     find_library(PCAP_LIBRARY NAMES pcap)
 endif()
 
-# 3. Define Executable Targets (Now enabled for ALL platforms)
+# 3. Define Executable# Target executable and its source files
 add_executable(netpulse
     src/main.cpp
     src/pcap_reader.cpp
+    src/live_capture.cpp
     src/packet_parser.cpp
     src/sni_extractor.cpp
     src/classifier.cpp
@@ -44,8 +45,6 @@ add_executable(netpulse
 # We want this executable compiled on Windows too, to discover our interface names!
 add_executable(live_capture_test src/live_capture_test.cpp)
 
-add_executable(live_test src/live_test_main.cpp src/live_capture.cpp)
-
 # 4. Target Linking and Dependency Management
 if(PCAP_LIBRARY)
     message(STATUS "Found Packet Capture Library at: ${PCAP_LIBRARY}")
@@ -53,16 +52,14 @@ if(PCAP_LIBRARY)
     # Link packet capture library to both targets
     target_link_libraries(netpulse ${PCAP_LIBRARY})
     target_link_libraries(live_capture_test ${PCAP_LIBRARY})
-    target_link_libraries(live_test ${PCAP_LIBRARY})
 else()
     message(FATAL_ERROR "Could not find libpcap (Linux/Mac) or Npcap/wpcap (Windows). Live capture compilation halted.")
 endif()
 
-# Windows requires linking the standard Windows Sockets subsystem (Winsock2)
+# Platform-specific linking
 if(WIN32)
     target_link_libraries(netpulse ws2_32)
     target_link_libraries(live_capture_test ws2_32)
-    target_link_libraries(live_test ws2_32)
 endif()
 
 # 5. Compiler Warnings Configuration

@@ -27,9 +27,17 @@ Config CLIParser::parse(int argc, char* argv[]) {
         return config;
     }
 
-    config.filename = first_arg;
+    if (first_arg == "--live") {
+        config.live_capture = true;
+        if (argc >= 3 && !isValidFlag(argv[2])) {
+            config.interface_name = argv[2];
+        }
+    } else {
+        config.filename = first_arg;
+    }
 
-    for (int i = 2; i < argc; ++i) {
+    int start_idx = config.live_capture ? (config.interface_name.empty() ? 2 : 3) : 2;
+    for (int i = start_idx; i < argc; ++i) {
         std::string arg = argv[i];
         
         if (arg == "--help" || arg == "-h") {
@@ -67,7 +75,8 @@ void CLIParser::printHelp(const std::string& program_name) {
               << "Analyzes PCAP files to classify network traffic using \n"
               << "TLS SNI extraction.\n\n"
               << "Usage:\n"
-              << "  " << program_name << " <file.pcap> [options]\n\n"
+              << "  " << program_name << " <file.pcap> [options]\n"
+              << "  " << program_name << " --live <interface> [options]\n\n"
               << "Options:\n"
               << "  --top N        Show top N connections (default: 10)\n"
               << "  --verbose      Print each classified packet in real-time\n"
@@ -79,6 +88,7 @@ void CLIParser::printHelp(const std::string& program_name) {
               << "  --help, -h     Show this help message\n\n"
               << "Examples:\n"
               << "  " << program_name << " capture.pcap\n"
+              << "  " << program_name << " --live eth0\n"
               << "  " << program_name << " capture.pcap --filter youtube --top 5\n"
               << "  " << program_name << " capture.pcap --csv > results.csv\n\n"
               << "Architecture:\n"

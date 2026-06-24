@@ -11,4 +11,6 @@ struct Config {
     bool help = false;
     bool no_color = false;
     bool demo = false;
+    bool live_capture = false;
+    std::string interface_name = "";
 };

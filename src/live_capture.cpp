@@ -79,3 +79,57 @@ void LiveCapture::close() {
         pcap_handle = nullptr;
     }
 }
+
+std::string LiveCapture::promptForInterface() {
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_if_t *alldevs;
+    pcap_if_t *d;
+
+    if (pcap_findalldevs(&alldevs, errbuf) == -1) {
+        std::cerr << "Error in pcap_findalldevs: " << errbuf << std::endl;
+        return "";
+    }
+
+    if (alldevs == nullptr) {
+        std::cerr << "No interfaces found! Make sure you have the required permissions (e.g., sudo / Administrator)." << std::endl;
+        return "";
+    }
+
+    std::vector<std::string> interfaceNames;
+    std::cout << "\nAvailable Network Interfaces:\n";
+    std::cout << "─────────────────────────────────────────────────\n";
+    
+    int i = 0;
+    for (d = alldevs; d != nullptr; d = d->next) {
+        interfaceNames.push_back(d->name);
+        std::cout << "  [" << ++i << "] " << d->name;
+        if (d->description) {
+            std::cout << " (" << d->description << ")";
+        }
+        std::cout << std::endl;
+    }
+    std::cout << "─────────────────────────────────────────────────\n";
+    pcap_freealldevs(alldevs);
+
+    int choice = 0;
+    while (true) {
+        std::cout << "Select an interface (1-" << interfaceNames.size() << ") [0 to exit]: ";
+        std::cin >> choice;
+        
+        if (std::cin.fail()) {
+            std::cin.clear();
+            std::cin.ignore(10000, '\n');
+            continue;
+        }
+
+        if (choice == 0) {
+            return "";
+        }
+
+        if (choice >= 1 && choice <= (int)interfaceNames.size()) {
+            return interfaceNames[choice - 1];
+        } else {
+            std::cout << "Invalid choice. Please try again.\n";
+        }
+    }
+}

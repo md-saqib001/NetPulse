@@ -12,6 +12,8 @@ public:
     bool captureOne(RawPacket& outPacket);
     void close();
 
+    static std::string promptForInterface();
+
 private:
     pcap_t* pcap_handle;
 };

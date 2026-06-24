@@ -33,7 +33,18 @@ enum class AppType {
     SWIGGY,
     ZOMATO,
     DNS_GOOGLE,
-    DNS_CLOUDFLARE
+    DNS_CLOUDFLARE,
+    CODECHEF,
+    CODEFORCES,
+    LEETCODE,
+    ATCODER,
+    SNAPCHAT,
+    BRAVE,
+    MICROSOFT,
+    SONYLIV,
+    ANTHROPIC,
+    CHATGPT,
+    GEMINI
 };
 
 class Classifier {
