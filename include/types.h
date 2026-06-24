@@ -80,6 +80,7 @@ struct Flow {
     uint64_t    byte_count   = 0;   // Accumulated payload bytes
     bool        classified   = false; // True once SNI is extracted
     AppType     app_type     = AppType::UNKNOWN;
+    bool        already_announced = false; // For live streaming
 };
 
 // ─── FlowTable: hash map from FiveTuple → Flow ─────────────────────────

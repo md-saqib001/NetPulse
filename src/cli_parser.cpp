@@ -5,7 +5,8 @@
 bool CLIParser::isValidFlag(const std::string& flag) {
     return flag == "--top" || flag == "--verbose" || flag == "--csv" || 
            flag == "--filter" || flag == "--help" || flag == "-h" ||
-           flag == "--no-color" || flag == "--demo";
+           flag == "--no-color" || flag == "--demo" ||
+           flag == "--verbose-live" || flag == "--json-stream";
 }
 
 Config CLIParser::parse(int argc, char* argv[]) {
@@ -62,6 +63,10 @@ Config CLIParser::parse(int argc, char* argv[]) {
         } else if (arg == "--demo") {
             config.demo = true;
             return config;
+        } else if (arg == "--verbose-live") {
+            config.verbose_live = true;
+        } else if (arg == "--json-stream") {
+            config.json_stream = true;
         } else {
             std::cerr << "Warning: Unknown flag " << arg << "\n";
         }
@@ -80,6 +85,8 @@ void CLIParser::printHelp(const std::string& program_name) {
               << "Options:\n"
               << "  --top N        Show top N connections (default: 10)\n"
               << "  --verbose      Print each classified packet in real-time\n"
+              << "  --verbose-live Print newly classified domains once per session\n"
+              << "  --json-stream  Print JSON-lines format for newly classified domains\n"
               << "  --filter APP   Show only traffic matching app name\n"
               << "                 (youtube, instagram, github, netflix, etc.)\n"
               << "  --csv          Output as CSV instead of formatted table\n"

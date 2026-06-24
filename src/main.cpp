@@ -12,6 +12,7 @@
 #include "reporter.h"
 #include "cli_parser.h"
 #include "colors.h"
+#include <ctime>
 
 /*
  * NETPULSE — Interview Talking Points
@@ -294,6 +295,29 @@ int main(int argc, char* argv[]) {
                         classified_domains++;
                     }
 
+                    if (!flow.already_announced) {
+                        flow.already_announced = true;
+                        
+                        if (config.json_stream) {
+                            std::cout << "{\"timestamp\": " << std::time(nullptr) 
+                                      << ", \"domain\": \"" << flow.sni 
+                                      << "\", \"app\": \"" << flow.app_name 
+                                      << "\", \"category\": \"" << classifier.category(flow.app_type) 
+                                      << "\", \"src_ip\": \"" << ipToString(tuple.src_ip) 
+                                      << "\", \"dst_port\": " << tuple.dst_port 
+                                      << "}\n" << std::flush;
+                        } else if (config.verbose_live) {
+                            std::time_t now = std::time(nullptr);
+                            char time_buf[64];
+                            std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", std::localtime(&now));
+                            
+                            std::string icon = flow.app_type == AppType::UNKNOWN ? "🔴" : "🟢";
+                            std::cout << "\r[" << time_buf << "] " << icon << " " << flow.sni 
+                                      << " (" << flow.app_name << ") — first seen";
+                            std::cout << "                                  \n" << std::flush;
+                        }
+                    }
+
                     if (config.verbose) {
                         std::string proto = tuple.protocol == 6 ? "TCP" : (tuple.protocol == 17 ? "UDP" : std::to_string(tuple.protocol));
                         std::string app_c = flow.app_type == AppType::UNKNOWN ? c(Colors::GRAY, flow.app_name) : c(Colors::GREEN, flow.app_name);
@@ -306,7 +330,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (config.live_capture && !config.verbose) {
+        if (config.live_capture && !config.verbose && !config.verbose_live && !config.json_stream) {
             auto now = std::chrono::steady_clock::now();
             if (std::chrono::duration_cast<std::chrono::seconds>(now - last_status_time).count() >= 5) {
                 last_status_time = now;

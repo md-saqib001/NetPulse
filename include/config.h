@@ -13,4 +13,6 @@ struct Config {
     bool demo = false;
     bool live_capture = false;
     std::string interface_name = "";
+    bool verbose_live = false;
+    bool json_stream = false;
 };
