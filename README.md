@@ -60,6 +60,49 @@ Show all commands:
 ./netpulse --help
 ```
 
+## Live Capture
+NetPulse can capture and parse packets directly from your network interface in real time, sharing the exact same inspection and reporting pipeline as the file-based mode.
+
+Start live capture (it will prompt you to select an interface):
+```bash
+./netpulse --live
+```
+
+Specify interface directly:
+```bash
+./netpulse --live eth0
+```
+
+Print a real-time stream of newly discovered domains as they happen:
+```bash
+./netpulse --live eth0 --verbose-live
+```
+
+Output a machine-readable JSON-lines stream of new domains (great for piping to dashboards):
+```bash
+./netpulse --live eth0 --json-stream
+```
+
+Capture for exactly 60 seconds and auto-exit:
+```bash
+./netpulse --live eth0 --duration 60
+```
+
+Filter real-time stream to only show a specific app (e.g. youtube):
+```bash
+./netpulse --live eth0 --filter youtube --verbose-live
+```
+
+Quiet mode: suppress real-time announcements and status updates, just silently capture and print the final report:
+```bash
+./netpulse --live eth0 --duration 30 --quiet
+```
+
+Save the live captured packets to a PCAP file simultaneously while analyzing:
+```bash
+./netpulse --live eth0 --output-pcap saved.pcap
+```
+
 ## Capturing Your Own Traffic
 To capture your own traffic to test with NetPulse:
 
@@ -84,25 +127,25 @@ sudo tcpdump -i en0 -w my_traffic.pcap &
 
 ## Architecture
 ```text
-┌─────────────────────────────────────────────────────────┐
-│                    NetPulse Pipeline                    │
-├──────────────┬──────────────┬──────────────┬────────────┤
-│ PcapReader   │PacketParser  │SNIExtractor  │Classifier  │
-│              │              │              │            │
-│ Read global  │ Ethernet hdr │ TLS record   │ Domain →   │
-│ header       │ (14 bytes)   │ header check │ AppType    │
-│              │              │              │            │
-│ Read packet  │ IPv4 header  │ Client Hello │ Pattern    │
-│ header+data  │ (IHL*4 bytes)│ verification │ matching   │
-│              │              │              │            │
-│ Handle byte  │ TCP header   │ Walk 5 var-  │ 30+ app    │
-│ swapping     │ (DO*4 bytes) │ length fields│ patterns   │
-│              │              │              │            │
-│ Return       │ Set payload  │ Find SNI ext │ Return     │
-│ RawPacket    │ pointer      │ type 0x0000  │ AppType    │
-└──────┬───────┴──────┬───────┴──────┬───────┴─────┬──────┘
-       │              │              │             │
-       └──────────────┴──────────────┴─────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                       NetPulse Pipeline                       │
+├───────────────┬──────────────┬──────────────┬─────────────────┤
+│ Packet Source │PacketParser  │SNIExtractor  │Classifier       │
+│               │              │              │                 │
+│ ┌───────────┐ │ Ethernet hdr │ TLS record   │ Domain →        │
+│ │PcapReader │ │ (14 bytes)   │ header check │ AppType         │
+│ │(Offline)  │ │              │              │                 │
+│ └─────┬─────┘ │ IPv4 header  │ Client Hello │ Pattern         │
+│       │       │ (IHL*4 bytes)│ verification │ matching        │
+│      OR       │              │              │                 │
+│       │       │ TCP header   │ Walk 5 var-  │ 30+ app         │
+│ ┌─────▼─────┐ │ (DO*4 bytes) │ length fields│ patterns        │
+│ │LiveCapture│ │              │              │                 │
+│ │(Real-time)│ │ Set payload  │ Find SNI ext │ Return          │
+│ └─────┬─────┘ │ pointer      │ type 0x0000  │ AppType         │
+└───────┴───────┴──────┬───────┴──────┬───────┴──────┬──────────┘
+                       │              │              │
+                       └──────────────┴──────────────┘
                               │
                     ┌─────────▼──────────┐
                     │   FlowTable        │
@@ -208,3 +251,11 @@ While taking my Computer Networks course, I wanted to bridge the gap between aca
 - [ ] --csv produces valid CSV importable to spreadsheet
 - [ ] Handles empty PCAP gracefully
 - [ ] Handles non-PCAP file gracefully
+
+## Interview Demo Script
+1. Open terminal and start the tool:
+   `./netpulse --live <interface> --verbose-live --output-pcap demo.pcap`
+2. Open a browser and visit `youtube.com`, `instagram.com`, `github.com` one at a time.
+3. Point out each real-time classification appearing within 1-2 seconds of the page load.
+4. Press `Ctrl+C` and show the final summary report generated immediately on exit.
+5. Emphasize the `--output-pcap` flag: "I can simultaneously record to disk. Because my pipeline treats live sockets and PCAP files identically, I can instantly replay this exact capture offline using `./netpulse demo.pcap`."

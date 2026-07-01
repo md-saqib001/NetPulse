@@ -13,6 +13,7 @@
 #include "cli_parser.h"
 #include "colors.h"
 #include <ctime>
+#include <stdexcept>
 
 /*
  * NETPULSE — Interview Talking Points
@@ -187,13 +188,40 @@ int main(int argc, char* argv[]) {
                 std::cout << "Capture cancelled.\n";
                 return 0;
             }
+        } else {
+            auto interfaces = LiveCapture::getAvailableInterfaces();
+            bool found = false;
+            for (const auto& iface : interfaces) {
+                if (iface.first == config.interface_name) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                std::cerr << c(Colors::RED, "Error: Interface '" + config.interface_name + "' not found.") << "\n";
+                std::cout << "\nAvailable Network Interfaces:\n";
+                std::cout << "─────────────────────────────────────────────────\n";
+                int i = 0;
+                for (const auto& iface : interfaces) {
+                    std::cout << "  [" << ++i << "] " << iface.first << " (" << iface.second << ")\n";
+                }
+                std::cout << "─────────────────────────────────────────────────\n";
+                return 1;
+            }
         }
 
         std::signal(SIGINT, signalHandler);
         if (!live_capture.open(config.interface_name)) {
             return 1;
         }
-        std::cout << "Listening on " << config.interface_name << "...\n";
+
+        if (!config.output_pcap.empty()) {
+            if (live_capture.enablePcapDump(config.output_pcap)) {
+                if (!config.quiet) std::cout << "Saving live capture to " << config.output_pcap << "...\n";
+            }
+        }
+
+        if (!config.quiet) std::cout << "Listening on " << config.interface_name << "...\n";
     } else {
         std::ifstream file(config.filename, std::ios::binary | std::ios::ate);
         if (!file.is_open()) {
@@ -219,24 +247,49 @@ int main(int argc, char* argv[]) {
     auto last_status_time = std::chrono::steady_clock::now();
     uint32_t classified_domains = 0;
 
-    while (capture_running) {
-        bool got_packet = false;
-        
-        if (config.live_capture) {
-            got_packet = live_capture.captureOne(packet);
-        } else {
-            got_packet = reader.readNextPacket(packet);
-            if (!got_packet) {
-                break; // End of file
+    auto last_packet_time = std::chrono::steady_clock::now();
+    bool has_received_traffic = false;
+    auto start_time = std::chrono::steady_clock::now();
+
+    try {
+        while (capture_running) {
+            if (config.live_capture && config.duration > 0) {
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count() >= config.duration) {
+                    capture_running = false;
+                    if (!config.quiet) std::cout << "\nDuration of " << config.duration << "s reached. Stopping.\n";
+                    break;
+                }
             }
-        }
 
-        if (config.live_capture && !got_packet) {
-            // Timeout, just loop again. Update status if needed.
-        }
+            bool got_packet = false;
+            
+            if (config.live_capture) {
+                got_packet = live_capture.captureOne(packet);
+            } else {
+                got_packet = reader.readNextPacket(packet);
+                if (!got_packet) {
+                    break; // End of file
+                }
+            }
 
-        if (got_packet) {
-            total_count++;
+            if (config.live_capture && !got_packet) {
+                // Timeout occurred
+                auto now = std::chrono::steady_clock::now();
+                if (has_received_traffic && std::chrono::duration_cast<std::chrono::seconds>(now - last_packet_time).count() >= 30) {
+                    if (!config.quiet) {
+                        std::cout << "\n  " << c(Colors::YELLOW, "⚠ No packets received in 30s — check if interface " + config.interface_name + " is still active") << "\n";
+                    }
+                    last_packet_time = now; // Reset to avoid spamming the warning
+                }
+            }
+
+            if (got_packet) {
+                if (config.live_capture) {
+                    has_received_traffic = true;
+                    last_packet_time = std::chrono::steady_clock::now();
+                }
+                total_count++;
             if (!config.live_capture) {
                 current_file_pos += 16 + packet.data.size();
                 if (total_count % 5000 == 0) {
@@ -298,27 +351,38 @@ int main(int argc, char* argv[]) {
                     if (!flow.already_announced) {
                         flow.already_announced = true;
                         
-                        if (config.json_stream) {
-                            std::cout << "{\"timestamp\": " << std::time(nullptr) 
-                                      << ", \"domain\": \"" << flow.sni 
-                                      << "\", \"app\": \"" << flow.app_name 
-                                      << "\", \"category\": \"" << classifier.category(flow.app_type) 
-                                      << "\", \"src_ip\": \"" << ipToString(tuple.src_ip) 
-                                      << "\", \"dst_port\": " << tuple.dst_port 
-                                      << "}\n" << std::flush;
-                        } else if (config.verbose_live) {
-                            std::time_t now = std::time(nullptr);
-                            char time_buf[64];
-                            std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", std::localtime(&now));
-                            
-                            std::string icon = flow.app_type == AppType::UNKNOWN ? "🔴" : "🟢";
-                            std::cout << "\r[" << time_buf << "] " << icon << " " << flow.sni 
-                                      << " (" << flow.app_name << ") — first seen";
-                            std::cout << "                                  \n" << std::flush;
+                        bool should_announce = true;
+                        if (!config.filter_app.empty()) {
+                            std::string lower_app = flow.app_name;
+                            std::transform(lower_app.begin(), lower_app.end(), lower_app.begin(), [](unsigned char c) { return std::tolower(c); });
+                            if (lower_app.find(config.filter_app) == std::string::npos) {
+                                should_announce = false;
+                            }
+                        }
+
+                        if (should_announce && !config.quiet) {
+                            if (config.json_stream) {
+                                std::cout << "{\"timestamp\": " << std::time(nullptr) 
+                                          << ", \"domain\": \"" << flow.sni 
+                                          << "\", \"app\": \"" << flow.app_name 
+                                          << "\", \"category\": \"" << classifier.category(flow.app_type) 
+                                          << "\", \"src_ip\": \"" << ipToString(tuple.src_ip) 
+                                          << "\", \"dst_port\": " << tuple.dst_port 
+                                          << "}\n" << std::flush;
+                            } else if (config.verbose_live) {
+                                std::time_t now = std::time(nullptr);
+                                char time_buf[64];
+                                std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", std::localtime(&now));
+                                
+                                std::string icon = flow.app_type == AppType::UNKNOWN ? "🔴" : "🟢";
+                                std::cout << "\r[" << time_buf << "] " << icon << " " << flow.sni 
+                                          << " (" << flow.app_name << ") — first seen";
+                                std::cout << "                                  \n" << std::flush;
+                            }
                         }
                     }
 
-                    if (config.verbose) {
+                    if (config.verbose && !config.quiet) {
                         std::string proto = tuple.protocol == 6 ? "TCP" : (tuple.protocol == 17 ? "UDP" : std::to_string(tuple.protocol));
                         std::string app_c = flow.app_type == AppType::UNKNOWN ? c(Colors::GRAY, flow.app_name) : c(Colors::GREEN, flow.app_name);
                         std::string dom_c = c(Colors::CYAN, flow.sni);
@@ -330,22 +394,36 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (config.live_capture && !config.verbose && !config.verbose_live && !config.json_stream) {
-            auto now = std::chrono::steady_clock::now();
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_status_time).count() >= 5) {
-                last_status_time = now;
-                std::string s_packets = std::to_string(total_count);
-                int insertPosition = s_packets.length() - 3;
-                while (insertPosition > 0) {
-                    s_packets.insert(insertPosition, ",");
-                    insertPosition -= 3;
+            if (config.live_capture && !config.verbose && !config.verbose_live && !config.json_stream && !config.quiet) {
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_status_time).count() >= 5) {
+                    last_status_time = now;
+                    std::string s_packets = std::to_string(total_count);
+                    int insertPosition = s_packets.length() - 3;
+                    while (insertPosition > 0) {
+                        s_packets.insert(insertPosition, ",");
+                        insertPosition -= 3;
+                    }
+
+                    std::string drop_info = "";
+                    CaptureStats cap_stats = live_capture.getStats();
+                    if (cap_stats.success) {
+                        double drop_pct = cap_stats.received == 0 ? 0.0 : ((double)cap_stats.dropped / cap_stats.received) * 100.0;
+                        char drop_buf[128];
+                        snprintf(drop_buf, sizeof(drop_buf), ", %u dropped (%.1f%%)", cap_stats.dropped, drop_pct);
+                        drop_info = drop_buf;
+                    }
+
+                    std::cout << "\rCapturing... " << s_packets << " packets" << drop_info << ", " 
+                              << flows.size() << " flows, " 
+                              << classified_domains << " classified domains "
+                              << "[Ctrl+C to stop and see report]" << std::flush;
                 }
-                std::cout << "\rCapturing... " << s_packets << " packets, " 
-                          << flows.size() << " flows, " 
-                          << classified_domains << " classified domains "
-                          << "[Ctrl+C to stop and see report]" << std::flush;
             }
         }
+    } catch (const std::exception& e) {
+        std::cerr << "\n" << c(Colors::RED, std::string("Fatal Capture Error: ") + e.what()) << "\n";
+        capture_running = false;
     }
 
     if (!config.live_capture) {

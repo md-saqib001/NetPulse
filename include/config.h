@@ -15,4 +15,7 @@ struct Config {
     std::string interface_name = "";
     bool verbose_live = false;
     bool json_stream = false;
+    int duration = 0;
+    bool quiet = false;
+    std::string output_pcap = "";
 };

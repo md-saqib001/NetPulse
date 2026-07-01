@@ -6,7 +6,8 @@ bool CLIParser::isValidFlag(const std::string& flag) {
     return flag == "--top" || flag == "--verbose" || flag == "--csv" || 
            flag == "--filter" || flag == "--help" || flag == "-h" ||
            flag == "--no-color" || flag == "--demo" ||
-           flag == "--verbose-live" || flag == "--json-stream";
+           flag == "--verbose-live" || flag == "--json-stream" ||
+           flag == "--duration" || flag == "--quiet" || flag == "--output-pcap";
 }
 
 Config CLIParser::parse(int argc, char* argv[]) {
@@ -67,6 +68,16 @@ Config CLIParser::parse(int argc, char* argv[]) {
             config.verbose_live = true;
         } else if (arg == "--json-stream") {
             config.json_stream = true;
+        } else if (arg == "--duration") {
+            if (i + 1 < argc) {
+                config.duration = std::stoi(argv[++i]);
+            }
+        } else if (arg == "--quiet") {
+            config.quiet = true;
+        } else if (arg == "--output-pcap") {
+            if (i + 1 < argc) {
+                config.output_pcap = argv[++i];
+            }
         } else {
             std::cerr << "Warning: Unknown flag " << arg << "\n";
         }
@@ -87,6 +98,9 @@ void CLIParser::printHelp(const std::string& program_name) {
               << "  --verbose      Print each classified packet in real-time\n"
               << "  --verbose-live Print newly classified domains once per session\n"
               << "  --json-stream  Print JSON-lines format for newly classified domains\n"
+              << "  --duration N   Stop live capture after N seconds\n"
+              << "  --quiet        Suppress real-time output and status updates\n"
+              << "  --output-pcap  Write live captured packets to a PCAP file\n"
               << "  --filter APP   Show only traffic matching app name\n"
               << "                 (youtube, instagram, github, netflix, etc.)\n"
               << "  --csv          Output as CSV instead of formatted table\n"
