@@ -259,3 +259,13 @@ While taking my Computer Networks course, I wanted to bridge the gap between aca
 3. Point out each real-time classification appearing within 1-2 seconds of the page load.
 4. Press `Ctrl+C` and show the final summary report generated immediately on exit.
 5. Emphasize the `--output-pcap` flag: "I can simultaneously record to disk. Because my pipeline treats live sockets and PCAP files identically, I can instantly replay this exact capture offline using `./netpulse demo.pcap`."
+
+
+
+## Quick Install (macOS & Linux)
+To install the latest release of NetPulse, run the following command in your terminal:
+
+```bash
+curl -sSL [https://raw.githubusercontent.com/md-saqib001/NetPulse/main/install.sh](https://raw.githubusercontent.com/md-saqib001/NetPulse/main/install.sh) | bash
+
+Whenever a user runs that single line, it will execute the `install.sh` script directly from your repository and handle the entire deployment process automatically.
