@@ -262,10 +262,49 @@ While taking my Computer Networks course, I wanted to bridge the gap between aca
 
 
 
-## Quick Install (macOS & Linux)
-To install the latest release of NetPulse, run the following command in your terminal:
+## Installation
+
+NetPulse is distributed as a standalone, pre-compiled binary for macOS, Linux, and Windows. 
+
+### 🍎 macOS & 🐧 Linux (Recommended)
+The easiest way to install the latest version of NetPulse is by using our automated installation script. Open your terminal and run:
 
 ```bash
-curl -sSL [https://raw.githubusercontent.com/md-saqib001/NetPulse/main/install.sh](https://raw.githubusercontent.com/md-saqib001/NetPulse/main/install.sh) | bash
+curl -sSL https://raw.githubusercontent.com/md-saqib001/NetPulse/main/install.sh | bash
+```
 
-Whenever a user runs that single line, it will execute the `install.sh` script directly from your repository and handle the entire deployment process automatically.
+*(This script detects your OS, downloads the correct binary, and moves it to your system PATH so you can run `netpulse` from anywhere).*
+
+### 🪟 Windows (Recommended)
+Windows users can easily install NetPulse using the Scoop package manager.
+
+**Prerequisite:** You must have the [Npcap SDK](https://npcap.com/) installed on your system to capture live network packets.
+
+Open PowerShell and run:
+
+```powershell
+scoop bucket add netpulse https://github.com/md-saqib001/scoop-netpulse
+scoop install netpulse
+```
+
+### 🛠️ Manual Installation (Advanced)
+If you prefer not to use package managers or install scripts, you can download the binaries directly from the [GitHub Releases](https://github.com/md-saqib001/NetPulse/releases) page, or fetch them manually via your terminal.
+
+#### macOS:
+```bash
+curl -L -o netpulse https://github.com/md-saqib001/NetPulse/releases/latest/download/netpulse-macOS
+chmod +x netpulse
+sudo mv netpulse /usr/local/bin/
+```
+
+#### Linux:
+```bash
+curl -L -o netpulse https://github.com/md-saqib001/NetPulse/releases/latest/download/netpulse-Linux
+chmod +x netpulse
+sudo mv netpulse /usr/local/bin/
+```
+
+#### Windows:
+1. Download `netpulse-Windows.exe` from the latest release.
+2. Rename it to `netpulse.exe`.
+3. Move it to a permanent folder and add that folder to your Windows System `PATH` environment variable.
